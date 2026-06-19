@@ -123,11 +123,13 @@
       <div class="photo-btn" id="btn-pump">
         <div class="icon">📷</div>
         <div class="label" id="label-pump">拍加油機</div>
+        <!-- 移除 capture="environment" 以支援相簿選擇 -->
         <input type="file" accept="image/*" id="input-pump" onchange="handlePhoto('pump', this)">
       </div>
       <div class="photo-btn" id="btn-odo">
         <div class="icon">🏍️</div>
         <div class="label" id="label-odo">拍里程表</div>
+        <!-- 移除 capture="environment" 以支援相簿選擇 -->
         <input type="file" accept="image/*" id="input-odo" onchange="handlePhoto('odo', this)">
       </div>
     </div>
@@ -178,9 +180,10 @@
     <div class="setting-item">
       <label>AI 模型</label>
       <select id="s-model">
-        <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash（免費）</option>
-        <option value="anthropic/claude-3-5-haiku">Claude 3.5 Haiku（便宜）</option>
-        <option value="anthropic/claude-sonnet-4-5">Claude Sonnet（準確）</option>
+        <!-- 更新為目前 OpenRouter 穩定的模型代號 -->
+        <option value="google/gemini-1.5-flash">Gemini 1.5 Flash（免費/通用）</option>
+        <option value="anthropic/claude-3-haiku">Claude 3 Haiku（便宜）</option>
+        <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet（準確）</option>
       </select>
     </div>
     <div class="setting-item">
@@ -213,7 +216,7 @@
 <script>
 // ── 資料 ──
 let records = JSON.parse(localStorage.getItem('fuel_records') || '[]');
-let settings = JSON.parse(localStorage.getItem('fuel_settings') || '{"model":"google/gemini-2.0-flash-001"}');
+let settings = JSON.parse(localStorage.getItem('fuel_settings') || '{"model":"google/gemini-1.5-flash"}');
 
 // ── 初始化 ──
 document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
@@ -255,7 +258,7 @@ async function handlePhoto(type, input) {
         messages: [{
           role: 'user',
           content: [
-            { type: 'image_url', image_url: { url: 'data:' + file.type + ';base64,' + base64 } },
+            { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + base64 } },
             { type: 'text', text: prompt }
           ]
         }],
@@ -267,7 +270,8 @@ async function handlePhoto(type, input) {
     if (!res.ok) throw new Error(data.error?.message || '辨識失敗');
 
     const text = data.choices[0].message.content.trim();
-    const json = JSON.parse(text.replace(/```json|```/g, '').trim());
+    const json = JSON.parse(text.replace(/```json|
+```/g, '').trim());
 
     if (type === 'pump') {
       if (json.liters) { setField('f-liters', json.liters); }
@@ -299,12 +303,45 @@ function setStatus(html) {
   document.getElementById('status-bar').innerHTML = html;
 }
 
+// ── 圖片壓縮處理 ──
 function toBase64(file) {
   return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result.split(',')[1]);
-    r.onerror = rej;
-    r.readAsDataURL(file);
+    const reader = new FileReader();
+    reader.onload = function(event) {
+      const img = new Image();
+      img.onload = function() {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1024;
+        const MAX_HEIGHT = 1024;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // 統一轉為 jpeg 格式以提升相容性，品質設為 0.8 以縮減檔案大小
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        res(dataUrl.split(',')[1]);
+      }
+      img.onerror = () => rej(new Error('圖片載入失敗'));
+      img.src = event.target.result;
+    };
+    reader.onerror = () => rej(new Error('檔案讀取失敗'));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -357,7 +394,7 @@ function renderHistory() {
     <div class="record-item">
       <div class="rec-left">
         <div class="rec-date">${r.date}</div>
-        <div class="rec-main">${r.liters} 公升${r.amount ? '　' + r.amount.toLocaleString() + ' 元' : ''}</div>
+        <div class="rec-main">${r.liters} 公升${r.amount ? ' ' + r.amount.toLocaleString() + ' 元' : ''}</div>
         <div class="rec-detail">里程 ${r.odo.toLocaleString()} km</div>
       </div>
       <div class="rec-eff">
