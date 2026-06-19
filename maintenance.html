@@ -44,7 +44,7 @@
   .spinner { width: 18px; height: 18px; border: 2.5px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* Fields (改成全寬上下排列，按鈕更大) */
+  /* Fields */
   .fields { display: flex; flex-direction: column; gap: 14px; margin-bottom: 18px; }
   .field label { font-size: 13px; color: var(--text2); display: block; margin-bottom: 6px; font-weight: 600; }
   .field input { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); font-size: 16px; font-weight: 500; background: var(--white); color: var(--text); outline: none; }
@@ -101,7 +101,7 @@
     <div class="photo-btn" id="btn-odo">
       <div class="icon">📷</div>
       <div class="label" id="label-odo">點擊拍里程表 (自動填入數字)</div>
-      <input type="file" accept="image/*" id="input-odo" onchange="handlePhoto(this)">
+      <input type="file" accept="image/jpeg, image/png, image/heic, image/*" id="input-odo" onclick="this.value = null" onchange="handlePhoto(this)">
     </div>
     
     <div class="status" id="status-bar">
@@ -143,7 +143,7 @@
   <div class="card">
     <div class="card-title">雲端連結設定 (重要)</div>
     <div class="setting-item">
-      <label>Google Apps Script URL (剛剛部署取得的網址)</label>
+      <label>Google Apps Script URL</label>
       <input type="text" id="s-gasurl" placeholder="https://script.google.com/macros/s/...">
     </div>
   </div>
@@ -183,7 +183,6 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// ── 變數與初始化 ──
 let settings = JSON.parse(localStorage.getItem('maint_settings') || '{"model":"anthropic/claude-3-haiku"}');
 let itemHistory = JSON.parse(localStorage.getItem('maint_items') || '["換機油","換齒輪油","換空濾","換前輪","換後輪","換皮帶"]');
 
@@ -208,23 +207,22 @@ function switchPage(name) {
   if (name === 'history') fetchHistory();
 }
 
-// ── 拍照與 AI 辨識 (修復選取照片卡死的問題) ──
 async function handlePhoto(input) {
-  if (!input.files || !input.files[0]) return;
-  const file = input.files[0];
-  
-  // 1. 強制讓畫面先顯示載入中，避免手機解碼圖片時畫面假死
-  setStatus('<div class="spinner"></div><span style="color:var(--primary-dark);">準備圖片中，請稍候...</span>');
-  await new Promise(resolve => setTimeout(resolve, 100)); // 暫停 0.1 秒讓瀏覽器有空檔畫出載入動畫
-
-  const apikey = document.getElementById('s-apikey').value.trim() || settings.apikey;
-  if (!apikey) { 
-    showToast('請先在設定頁面輸入 API Key'); 
-    switchPage('settings'); 
-    return; 
-  }
-
   try {
+    if (!input.files || input.files.length === 0) return;
+    const file = input.files[0];
+    
+    // 強制立即更新畫面，防範假死
+    setStatus('<div class="spinner"></div><span style="color:var(--primary-dark);">準備圖片中，請稍候...</span>');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const apikey = document.getElementById('s-apikey').value.trim() || settings.apikey;
+    if (!apikey) { 
+      showToast('請先在設定頁面輸入 API Key'); 
+      switchPage('settings'); 
+      return; 
+    }
+
     const base64 = await toBase64(file);
     setStatus('<div class="spinner"></div><span style="color:var(--primary-dark);">照片讀取成功，AI 正在辨識里程...</span>');
 
@@ -265,32 +263,39 @@ async function handlePhoto(input) {
     }
   } catch(e) {
     console.error(e);
-    setStatus('<span style="color:#c0392b;">辨識錯誤：' + e.message + '，請直接手動輸入里程</span>');
+    setStatus('<span style="color:#c0392b;">辨識錯誤：請確保照片清晰，或直接手動輸入里程</span>');
+  } finally {
+    // 雙重保險：執行完畢後徹底清空 input，確保下次必能觸發
+    input.value = '';
   }
 }
 
-// 記憶體安全圖片壓縮
+// 改回 FileReader 解決 iOS PWA 記憶體物件阻斷問題
 function toBase64(file) {
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = function() {
-      try {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 1024; const MAX_HEIGHT = 1024;
-        let width = img.width; let height = img.height;
-        if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } 
-        else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
-        canvas.width = width; canvas.height = height;
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.75).split(',')[1]);
-      } catch (err) { reject(err); } finally { URL.revokeObjectURL(img.src); }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onload = function() {
+        try {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 1024; const MAX_HEIGHT = 1024;
+          let width = img.width; let height = img.height;
+          if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } 
+          else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
+          canvas.width = width; canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.75).split(',')[1]);
+        } catch (err) { reject(err); }
+      };
+      img.onerror = () => reject(new Error('照片解碼失敗，格式可能不支援'));
+      img.src = e.target.result;
     };
-    img.onerror = () => reject(new Error('圖片解碼失敗，請嘗試另一張照片'));
-    img.src = URL.createObjectURL(file);
+    reader.onerror = () => reject(new Error('檔案讀取失敗'));
+    reader.readAsDataURL(file);
   });
 }
 
-// ── 寫入雲端 (Google Sheets) ──
 async function saveRecord() {
   const date = document.getElementById('f-date').value;
   const odo = document.getElementById('f-odo').value;
@@ -307,9 +312,8 @@ async function saveRecord() {
     switchPage('settings'); return;
   }
 
-  // 自動學習新品項並加入下拉選單
   if (!itemHistory.includes(item)) {
-    itemHistory.unshift(item); // 加到最前面
+    itemHistory.unshift(item);
     localStorage.setItem('maint_items', JSON.stringify(itemHistory));
     renderDatalist();
   }
@@ -321,57 +325,40 @@ async function saveRecord() {
 
   try {
     const payload = { date, odo, item, amount };
-    const res = await fetch(gasUrl, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
+    const res = await fetch(gasUrl, { method: 'POST', body: JSON.stringify(payload) });
     
     if (res.ok) {
       showToast('✅ 成功儲存至雲端表格');
       setStatus('<span>記錄已成功上傳雲端！準備好記錄下一筆。</span>');
-      // 清空表單，保留日期
       document.getElementById('f-odo').value = '';
       document.getElementById('f-item').value = '';
       document.getElementById('f-amount').value = '';
       document.getElementById('f-odo').classList.remove('ai-filled');
       document.getElementById('btn-odo').classList.remove('done');
       document.getElementById('label-odo').textContent = '點擊拍里程表 (自動填入數字)';
-    } else {
-      throw new Error('伺服器無回應');
-    }
+    } else { throw new Error('伺服器無回應'); }
   } catch (e) {
     showToast('上傳失敗，請檢查網路或網址');
-    setStatus('<span style="color:#c0392b;">上傳失敗：' + e.message + '</span>');
+    setStatus('<span style="color:#c0392b;">上傳失敗：請檢查網路</span>');
   } finally {
     btn.disabled = false;
     btn.textContent = '儲存上傳至雲端';
   }
 }
 
-// ── 讀取雲端歷史紀錄 ──
 async function fetchHistory() {
   const gasUrl = document.getElementById('s-gasurl').value.trim() || settings.gasurl;
   const listEl = document.getElementById('records-list');
-  
-  if (!gasUrl) {
-    listEl.innerHTML = '<div class="empty">請先至設定頁面填寫 Google Apps Script 網址</div>';
-    return;
-  }
+  if (!gasUrl) { listEl.innerHTML = '<div class="empty">請先至設定頁面填寫 Google Apps Script 網址</div>'; return; }
 
   listEl.innerHTML = '<div class="empty"><div class="spinner" style="margin:0 auto 10px;"></div>正在從雲端載入資料...</div>';
 
   try {
     const res = await fetch(gasUrl);
     const records = await res.json();
+    if (!records || records.length === 0) { listEl.innerHTML = '<div class="empty">雲端表格目前沒有資料</div>'; return; }
 
-    if (!records || records.length === 0) {
-      listEl.innerHTML = '<div class="empty">雲端表格目前沒有資料</div>';
-      return;
-    }
-
-    // 將資料反轉，讓最新的顯示在上面
     records.reverse();
-
     listEl.innerHTML = records.map(r => {
       const dateStr = r.date.split('T')[0];
       return `
@@ -386,13 +373,11 @@ async function fetchHistory() {
         </div>
       </div>
     `}).join('');
-
   } catch (e) {
-    listEl.innerHTML = '<div class="empty">載入失敗，請確認 Apps Script 網址是否正確且權限設為「所有人」</div>';
+    listEl.innerHTML = '<div class="empty">載入失敗，請確認 Apps Script 網址正確且權限設為「所有人」</div>';
   }
 }
 
-// ── 設定與小工具 ──
 function saveSettings() {
   settings.apikey = document.getElementById('s-apikey').value.trim();
   settings.model = document.getElementById('s-model').value;
