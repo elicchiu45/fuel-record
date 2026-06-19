@@ -21,7 +21,6 @@
   .header { background: var(--green-dark); color: white; padding: 52px 20px 18px; display: flex; justify-content: space-between; align-items: flex-end; }
   .header h1 { font-size: 24px; font-weight: 600; }
   .header-sub { font-size: 13px; opacity: 0.75; margin-top: 2px; }
-  .settings-btn { background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 50%; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 
   /* Tabs */
   .tabs { display: flex; background: var(--green-dark); padding: 0 20px; gap: 4px; }
@@ -47,7 +46,7 @@
   .photo-btn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
 
   /* Status */
-  .status { background: var(--bg); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; color: var(--text2); margin-bottom: 12px; min-height: 40px; display: flex; align-items: center; gap: 8px; }
+  .status { background: var(--bg); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; color: var(--text2); margin-bottom: 12px; min-height: 40px; display: flex; align-items: center; gap: 8px; line-height: 1.4; }
   .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--green); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -76,7 +75,6 @@
 
   /* Records */
   .record-item { background: var(--white); border-radius: var(--radius-sm); padding: 14px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-  .rec-left {}
   .rec-date { font-size: 12px; color: var(--text2); margin-bottom: 3px; }
   .rec-main { font-size: 15px; font-weight: 600; }
   .rec-detail { font-size: 12px; color: var(--text2); margin-top: 2px; }
@@ -115,7 +113,6 @@
   </div>
 </div>
 
-<!-- Pages -->
 <div id="page-record" class="page active">
   <div class="card">
     <div class="card-title">拍照辨識</div>
@@ -123,13 +120,11 @@
       <div class="photo-btn" id="btn-pump">
         <div class="icon">📷</div>
         <div class="label" id="label-pump">拍加油機</div>
-        <!-- 移除 capture="environment" 以支援相簿選擇 -->
         <input type="file" accept="image/*" id="input-pump" onchange="handlePhoto('pump', this)">
       </div>
       <div class="photo-btn" id="btn-odo">
         <div class="icon">🏍️</div>
         <div class="label" id="label-odo">拍里程表</div>
-        <!-- 移除 capture="environment" 以支援相簿選擇 -->
         <input type="file" accept="image/*" id="input-odo" onchange="handlePhoto('odo', this)">
       </div>
     </div>
@@ -180,7 +175,6 @@
     <div class="setting-item">
       <label>AI 模型</label>
       <select id="s-model">
-        <!-- 更新為目前 OpenRouter 穩定的模型代號 -->
         <option value="google/gemini-1.5-flash">Gemini 1.5 Flash（免費/通用）</option>
         <option value="anthropic/claude-3-haiku">Claude 3 Haiku（便宜）</option>
         <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet（準確）</option>
@@ -198,7 +192,6 @@
   </div>
 </div>
 
-<!-- Bottom Nav -->
 <nav class="bottom-nav">
   <button class="nav-btn active" id="nav-record" onclick="switchPage('record')">
     <span class="nav-icon">⛽</span>加油
@@ -218,11 +211,21 @@
 let records = JSON.parse(localStorage.getItem('fuel_records') || '[]');
 let settings = JSON.parse(localStorage.getItem('fuel_settings') || '{"model":"google/gemini-1.5-flash"}');
 
-// ── 初始化 ──
-document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
-if (settings.apikey) document.getElementById('s-apikey').value = settings.apikey;
-if (settings.model) document.getElementById('s-model').value = settings.model;
-if (settings.tank) document.getElementById('s-tank').value = settings.tank;
+// ── 初始化與安全防禦機制 ──
+try {
+  document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
+  if (settings.apikey) document.getElementById('s-apikey').value = settings.apikey;
+  
+  if (settings.model) {
+    const selectEl = document.getElementById('s-model');
+    // 檢查選單內是否有舊的失效 model，若無則強制指定新版預設型號，防止下拉選單卡死變空白
+    const hasOption = Array.from(selectEl.options).some(opt => opt.value === settings.model);
+    selectEl.value = hasOption ? settings.model : "google/gemini-1.5-flash";
+  }
+  if (settings.tank) document.getElementById('s-tank').value = settings.tank;
+} catch(err) {
+  console.error("初始化失敗:", err);
+}
 
 // ── 頁面切換 ──
 function switchPage(name) {
@@ -233,18 +236,29 @@ function switchPage(name) {
   if (name === 'history') renderHistory();
 }
 
-// ── 拍照辨識 ──
+// ── 拍照與選擇照片辨識 ──
 async function handlePhoto(type, input) {
   if (!input.files || !input.files[0]) return;
   const file = input.files[0];
-  const apikey = document.getElementById('s-apikey').value.trim() || settings.apikey;
-  if (!apikey) { showToast('請先在設定頁面輸入 API Key'); switchPage('settings'); return; }
+  
+  // 立即反饋狀態
+  setStatus('<div class="spinner"></div><span>正在讀取並壓縮圖片...</span>');
 
-  setStatus('<div class="spinner"></div><span>AI 辨識中，請稍候...</span>');
+  const apikey = document.getElementById('s-apikey').value.trim() || settings.apikey;
+  if (!apikey) { 
+    setStatus('<span>請先至設定頁面輸入 API Key</span>');
+    showToast('請先在設定頁面輸入 API Key'); 
+    switchPage('settings'); 
+    return; 
+  }
 
   try {
+    // 執行優化後的記憶體安全壓縮
     const base64 = await toBase64(file);
-    const model = document.getElementById('s-model').value || settings.model;
+    setStatus('<div class="spinner"></div><span>圖片壓縮完成，AI 辨識中...</span>');
+
+    let model = document.getElementById('s-model').value;
+    if (!model) model = "google/gemini-1.5-flash"; // 防禦機制
 
     const prompt = type === 'pump'
       ? '這是加油機的照片。請辨識：1)加油量(公升) 2)金額(元/台幣)。只回傳JSON格式：{"liters":數字,"amount":數字}，數字不要有單位，無法辨識的填null。'
@@ -267,11 +281,10 @@ async function handlePhoto(type, input) {
     });
 
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || '辨識失敗');
+    if (!res.ok) throw new Error(data.error?.message || 'OpenRouter 拒絕連線');
 
     const text = data.choices[0].message.content.trim();
-    const json = JSON.parse(text.replace(/```json|
-```/g, '').trim());
+    const json = JSON.parse(text.replace(/```json|```/g, '').trim());
 
     if (type === 'pump') {
       if (json.liters) { setField('f-liters', json.liters); }
@@ -288,8 +301,9 @@ async function handlePhoto(type, input) {
     document.getElementById('ai-badge-row').style.display = 'block';
 
   } catch(e) {
-    setStatus('<span>辨識失敗：' + e.message + '，請手動輸入</span>');
-    showToast('辨識失敗，請手動輸入');
+    console.error(e);
+    setStatus('<span style="color:#c0392b;">錯誤：' + e.message + '</span>');
+    showToast('辨識失敗，請檢查狀態列原因');
   }
 }
 
@@ -303,15 +317,18 @@ function setStatus(html) {
   document.getElementById('status-bar').innerHTML = html;
 }
 
-// ── 圖片壓縮處理 ──
+// ── 記憶體安全型圖片壓縮與 Base64 轉換 ──
 function toBase64(file) {
-  return new Promise((res, rej) => {
-    const reader = new FileReader();
-    reader.onload = function(event) {
-      const img = new Image();
-      img.onload = function() {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error('讀取不到檔案'));
+      return;
+    }
+    const img = new Image();
+    img.onload = function() {
+      try {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 1024;
+        const MAX_WIDTH = 1024; // 限制最大尺寸防止 API 拒收與手機卡死
         const MAX_HEIGHT = 1024;
         let width = img.width;
         let height = img.height;
@@ -333,15 +350,21 @@ function toBase64(file) {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
         
-        // 統一轉為 jpeg 格式以提升相容性，品質設為 0.8 以縮減檔案大小
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        res(dataUrl.split(',')[1]);
+        // 統一轉為標準 JPEG 並壓縮品質
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+        const base64Str = dataUrl.split(',')[1];
+        resolve(base64Str);
+      } catch (err) {
+        reject(err);
+      } finally {
+        URL.revokeObjectURL(img.src); // 立即釋放物件記憶體
       }
-      img.onerror = () => rej(new Error('圖片載入失敗'));
-      img.src = event.target.result;
     };
-    reader.onerror = () => rej(new Error('檔案讀取失敗'));
-    reader.readAsDataURL(file);
+    img.onerror = function() {
+      reject(new Error('圖片解碼失敗，請嘗試更換照片'));
+    };
+    // 使用 ObjectURL 取代大字串 FileReader，徹底避開 Safari 記憶體線程卡死問題
+    img.src = URL.createObjectURL(file);
   });
 }
 
