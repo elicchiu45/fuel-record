@@ -36,12 +36,12 @@
   .card-title { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; }
 
   /* Photo buttons */
-  .photo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-  .photo-btn { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 20px 12px; text-align: center; cursor: pointer; background: var(--bg); transition: all 0.2s; position: relative; }
+  .photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .photo-btn { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 16px 6px; text-align: center; cursor: pointer; background: var(--bg); transition: all 0.2s; position: relative; }
   .photo-btn:active { transform: scale(0.97); }
   .photo-btn.done { border-style: solid; border-color: var(--green); background: var(--green-light); }
-  .photo-btn .icon { font-size: 30px; margin-bottom: 6px; }
-  .photo-btn .label { font-size: 12px; color: var(--text2); font-weight: 500; }
+  .photo-btn .icon { font-size: 26px; margin-bottom: 4px; }
+  .photo-btn .label { font-size: 11px; color: var(--text2); font-weight: 500; }
   .photo-btn.done .label { color: var(--green-dark); }
   .photo-btn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
 
@@ -121,6 +121,11 @@
         <div class="icon">📷</div>
         <div class="label" id="label-pump">拍加油機</div>
         <input type="file" accept="image/*" id="input-pump" onchange="handlePhoto('pump', this)">
+      </div>
+      <div class="photo-btn" id="btn-receipt">
+        <div class="icon">🧾</div>
+        <div class="label" id="label-receipt">拍發票清單</div>
+        <input type="file" accept="image/*" id="input-receipt" onchange="handlePhoto('receipt', this)">
       </div>
       <div class="photo-btn" id="btn-odo">
         <div class="icon">🏍️</div>
@@ -209,7 +214,7 @@
 <script>
 // ── 資料 ──
 let records = JSON.parse(localStorage.getItem('fuel_records') || '[]');
-let settings = JSON.parse(localStorage.getItem('fuel_settings') || '{"model":"google/gemini-1.5-flash"}');
+let settings = JSON.parse(localStorage.getItem('fuel_settings') || '{"model":"gemini-3.5-flash-lite"}');
 
 // ── 初始化與安全防禦機制 ──
 try {
@@ -220,7 +225,7 @@ try {
     const selectEl = document.getElementById('s-model');
     // 檢查選單內是否有舊的失效 model，若無則強制指定新版預設型號，防止下拉選單卡死變空白
     const hasOption = Array.from(selectEl.options).some(opt => opt.value === settings.model);
-    selectEl.value = hasOption ? settings.model : "google/gemini-1.5-flash";
+    selectEl.value = hasOption ? settings.model : "gemini-3.5-flash-lite";
   }
   if (settings.tank) document.getElementById('s-tank').value = settings.tank;
 } catch(err) {
@@ -257,41 +262,45 @@ async function handlePhoto(type, input) {
     const base64 = await toBase64(file);
     setStatus('<div class="spinner"></div><span>圖片壓縮完成，AI 辨識中...</span>');
 
-    let model = document.getElementById('s-model').value;
-    if (!model) model = "google/gemini-1.5-flash"; // 防禦機制
+    let model = document.getElementById('s-model').value || 'gemini-3.5-flash-lite';
+    if (!model.startsWith('gemini-')) model = 'gemini-3.5-flash-lite';
 
     const prompt = type === 'pump'
-      ? '這是加油機的照片。請辨識：1)加油量(公升) 2)金額(元/台幣)。只回傳JSON格式：{"liters":數字,"amount":數字}，數字不要有單位，無法辨識的填null。'
+      ? '這是加油機的照片。請辨識：1)加油量(公升) 2)金額(元/台幣)。只回傳JSON格式：{"liters":數字,"amount":數字}，數字不要有單位，無法辨識填null。'
       : '這是機車里程表的照片。請辨識目前的里程數(公里)。只回傳JSON格式：{"odo":數字}，數字不要有單位，無法辨識填null。';
 
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apikey}`;
+    const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apikey },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: model,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + base64 } },
-            { type: 'text', text: prompt }
+        contents: [{
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: 'image/jpeg', data: base64 } }
           ]
         }],
-        max_tokens: 100
+        generationConfig: {
+          response_mime_type: 'application/json'
+        }
       })
     });
 
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'OpenRouter 拒絕連線');
+    if (!res.ok) throw new Error(data.error?.message || 'Gemini 連線失敗');
 
-    const text = data.choices[0].message.content.trim();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const json = JSON.parse(text.replace(/```json|```/g, '').trim());
 
-    if (type === 'pump') {
+    if (type === 'pump' || type === 'receipt') {
+      const typeName = type === 'pump' ? '加油機' : '發票清單';
+      const btnId = type === 'pump' ? 'btn-pump' : 'btn-receipt';
+      const labelId = type === 'pump' ? 'label-pump' : 'label-receipt';
       if (json.liters) { setField('f-liters', json.liters); }
       if (json.amount) { setField('f-amount', json.amount); }
-      document.getElementById('btn-pump').classList.add('done');
-      document.getElementById('label-pump').textContent = '辨識完成 ✓';
-      setStatus('<span>加油機辨識完成：' + (json.liters||'?') + 'L，' + (json.amount||'?') + ' 元</span>');
+      document.getElementById(btnId).classList.add('done');
+      document.getElementById(labelId).textContent = '辨識完成 ✓';
+      setStatus(`<span>${typeName}辨識完成：` + (json.liters||'?') + ' L，' + (json.amount||'?') + ' 元</span>');
     } else {
       if (json.odo) { setField('f-odo', json.odo); }
       document.getElementById('btn-odo').classList.add('done');
@@ -390,8 +399,10 @@ function saveRecord() {
   });
   document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
   document.getElementById('btn-pump').classList.remove('done');
+  document.getElementById('btn-receipt').classList.remove('done');
   document.getElementById('btn-odo').classList.remove('done');
   document.getElementById('label-pump').textContent = '拍加油機';
+  document.getElementById('label-receipt').textContent = '拍發票清單';
   document.getElementById('label-odo').textContent = '拍里程表';
   document.getElementById('ai-badge-row').style.display = 'none';
   setStatus('<span>記錄已儲存！</span>');
