@@ -170,19 +170,18 @@
   <div class="card">
     <div class="card-title">AI 設定</div>
     <div class="setting-item">
-      <label>OpenRouter API Key</label>
+      <label>Gemini API Key</label>
       <div class="api-key-wrap">
-        <input type="password" id="s-apikey" placeholder="sk-or-v1-...">
+        <input type="password" id="s-apikey" placeholder="AQ... 或 AIza...">
         <button class="toggle-key" onclick="toggleKey()">👁</button>
       </div>
-      <div class="hint">取得 API Key：<a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a></div>
+      <div class="hint">取得 API Key：<a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a></div>
     </div>
     <div class="setting-item">
       <label>AI 模型</label>
       <select id="s-model">
-        <option value="google/gemini-1.5-flash">Gemini 1.5 Flash（免費/通用）</option>
-        <option value="anthropic/claude-3-haiku">Claude 3 Haiku（便宜）</option>
-        <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet（準確）</option>
+        <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite（快速不塞車/推薦）</option>
+        <option value="gemini-3.8-flash">Gemini 3.8 Flash（高精準度）</option>
       </select>
     </div>
     <div class="setting-item">
@@ -265,9 +264,14 @@ async function handlePhoto(type, input) {
     let model = document.getElementById('s-model').value || 'gemini-3.5-flash-lite';
     if (!model.startsWith('gemini-')) model = 'gemini-3.5-flash-lite';
 
-    const prompt = type === 'pump'
-      ? '這是加油機的照片。請辨識：1)加油量(公升) 2)金額(元/台幣)。只回傳JSON格式：{"liters":數字,"amount":數字}，數字不要有單位，無法辨識填null。'
-      : '這是機車里程表的照片。請辨識目前的里程數(公里)。只回傳JSON格式：{"odo":數字}，數字不要有單位，無法辨識填null。';
+    let prompt = '';
+    if (type === 'pump') {
+      prompt = '這是加油機螢幕的照片。請仔細辨識：1) 加油量(公升/L) 2) 總金額(元/NT$)。只回傳純JSON格式：{"liters": 數字, "amount": 數字}。數字不要包含單位；若無法辨識請填null。';
+    } else if (type === 'receipt') {
+      prompt = '這是加油站發票、銷貨收據、明細清單或簽帳單的照片。請仔細辨識：1) 加油的公升數或數量(L) 2) 總計/應付金額(元/NT$)。只回傳純JSON格式：{"liters": 數字, "amount": 數字}。數字必須為純數字，不要包含單位；若無法辨識請填null。';
+    } else {
+      prompt = '這是機車儀表板或里程表的照片。請仔細辨識目前的總里程數(ODO，公里/km)。只回傳純JSON格式：{"odo": 數字}。數字必須為整數，不要包含單位；若無法辨識請填null。';
+    }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apikey}`;
     const res = await fetch(url, {
@@ -289,8 +293,9 @@ async function handlePhoto(type, input) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Gemini 連線失敗');
 
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const json = JSON.parse(text.replace(/```json|```/g, '').trim());
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const match = text.match(/\{[\s\S]*\}/);
+    const json = match ? JSON.parse(match[0]) : {};
 
     if (type === 'pump' || type === 'receipt') {
       const typeName = type === 'pump' ? '加油機' : '發票清單';
