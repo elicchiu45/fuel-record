@@ -176,17 +176,17 @@
   <div class="card">
     <div class="card-title">AI 辨識設定</div>
     <div class="setting-item">
-      <label>OpenRouter API Key</label>
+      <label>Gemini API Key</label>
       <div class="api-key-wrap">
-        <input type="password" id="s-apikey" placeholder="sk-or-v1-...">
+        <input type="password" id="s-apikey" placeholder="AQ... 或 AIza...">
         <button class="toggle-key" onclick="toggleKey()">👁</button>
       </div>
     </div>
     <div class="setting-item">
       <label>AI 模型</label>
       <select id="s-model">
-        <option value="anthropic/claude-3-haiku">Claude 3 Haiku (穩定推薦)</option>
-        <option value="google/gemini-1.5-flash">Gemini 1.5 Flash</option>
+        <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite（快速不易塞車/推薦）</option>
+        <option value="gemini-3.8-flash">Gemini 3.8 Flash（高精準度）</option>
       </select>
     </div>
     <button class="btn-primary" onclick="saveSettings()">儲存設定</button>
@@ -208,7 +208,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
-let settings = JSON.parse(localStorage.getItem('maint_settings') || '{"model":"anthropic/claude-3-haiku"}');
+let settings = JSON.parse(localStorage.getItem('maint_settings') || '{"model":"gemini-3.5-flash-lite"}');
 let itemHistory = JSON.parse(localStorage.getItem('maint_items') || '["換機油","換齒輪油","換空濾","換前輪","換後輪","換皮帶"]');
 let pendingRecords = []; // 暫存清單
 
@@ -251,29 +251,31 @@ async function handlePhoto(input) {
 
   try {
     const base64 = await toBase64(file);
-    const model = document.getElementById('s-model').value || "anthropic/claude-3-haiku";
+    let model = document.getElementById('s-model').value || 'gemini-3.5-flash-lite';
+    if (!model.startsWith('gemini-')) model = 'gemini-3.5-flash-lite';
     const prompt = '這是機車儀表板的照片。請辨識目前的總里程數(公里)。只回傳JSON格式：{"odo":數字}，數字不要有單位，無法辨識填null。';
 
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apikey}`;
+    const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apikey },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: model,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + base64 } },
-            { type: 'text', text: prompt }
+        contents: [{
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: 'image/jpeg', data: base64 } }
           ]
         }],
-        max_tokens: 100
+        generationConfig: {
+          response_mime_type: 'application/json'
+        }
       })
     });
 
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || '辨識失敗');
+    if (!res.ok) throw new Error(data.error?.message || 'Gemini 辨識失敗');
 
-    const text = data.choices[0].message.content.trim();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const json = JSON.parse(text.replace(/```json|```/g, '').trim());
 
     if (json.odo) { 
