@@ -18,6 +18,7 @@
   body { font-family: -apple-system, 'PingFang TC', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
   /* Header */
+  .version-badge { font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.25); padding: 2px 8px; border-radius: 6px; margin-left: 6px; vertical-align: middle; border: 1px solid rgba(255,255,255,0.35); }
   .header { background: var(--green-dark); color: white; padding: 52px 20px 18px; display: flex; justify-content: space-between; align-items: flex-end; }
   .header h1 { font-size: 24px; font-weight: 600; }
   .header-sub { font-size: 13px; opacity: 0.75; margin-top: 2px; }
@@ -108,7 +109,7 @@
 
 <div class="header">
   <div>
-    <h1>⛽ 加油記錄</h1>
+    <h1>⛽ 加油記錄 <span class="version-badge">v1.0</span></h1>
     <div class="header-sub">拍照，AI 自動辨識</div>
   </div>
 </div>
@@ -259,18 +260,18 @@ async function handlePhoto(type, input) {
   try {
     // 執行優化後的記憶體安全壓縮
     const base64 = await toBase64(file);
-    setStatus('<div class="spinner"></div><span>圖片壓縮完成，AI 辨識中...</span>');
+    setStatus('<div class="spinner"></div><span>圖片已壓縮，AI 辨識中...</span>');
 
     let model = document.getElementById('s-model').value || 'gemini-3.5-flash-lite';
     if (!model.startsWith('gemini-')) model = 'gemini-3.5-flash-lite';
 
     let prompt = '';
     if (type === 'pump') {
-      prompt = '這是加油機螢幕的照片。請仔細辨識：1) 加油量(公升/L) 2) 總金額(元/NT$)。只回傳純JSON格式：{"liters": 數字, "amount": 數字}。數字不要包含單位；若無法辨識請填null。';
+      prompt = '這是一張加油機螢幕的照片。請找出畫面中的兩個數值：1. 加油量或公升數(L) 2. 總金額(元/NT$)。請只輸出純JSON格式：{"liters": 數字, "amount": 數字}。數字請為純數字，不要附帶文字或單位。若找不到請填null。';
     } else if (type === 'receipt') {
-      prompt = '這是加油站發票、銷貨收據、明細清單或簽帳單的照片。請仔細辨識：1) 加油的公升數或數量(L) 2) 總計/應付金額(元/NT$)。只回傳純JSON格式：{"liters": 數字, "amount": 數字}。數字必須為純數字，不要包含單位；若無法辨識請填null。';
+      prompt = '這是一張加油發票、銷貨收據、明細清單或簽帳單的照片。請找出：1. 加油公升數(通常標示為數量、公升或L) 2. 總金額(通常標示為總計、應付金額或金額)。請只輸出純JSON格式：{"liters": 數字, "amount": 數字}。數字請為純數字，不要附帶文字或單位。若找不到請填null。';
     } else {
-      prompt = '這是機車儀表板或里程表的照片。請仔細辨識目前的總里程數(ODO，公里/km)。只回傳純JSON格式：{"odo": 數字}。數字必須為整數，不要包含單位；若無法辨識請填null。';
+      prompt = '這是一張機車儀表板或里程表的照片。請找出目前的總里程數(ODO，公里/km)。請只輸出純JSON格式：{"odo": 數字}。數字請為純整數，不要附帶文字或單位。若找不到請填null。';
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apikey}`;
@@ -285,7 +286,7 @@ async function handlePhoto(type, input) {
           ]
         }],
         generationConfig: {
-          response_mime_type: 'application/json'
+          response_mime_type: "application/json"
         }
       })
     });
@@ -294,23 +295,59 @@ async function handlePhoto(type, input) {
     if (!res.ok) throw new Error(data.error?.message || 'Gemini 連線失敗');
 
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    const match = text.match(/\{[\s\S]*\}/);
-    const json = match ? JSON.parse(match[0]) : {};
+    console.log("Gemini Raw Response:", text);
+    
+    // 智慧正規表達式擷取 JSON 與數字
+    let json = {};
+    try {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) json = JSON.parse(match[0]);
+    } catch(err) {
+      console.warn("JSON parse error:", err);
+    }
+
+    // 容錯提取函數：支援中英各類常見 key，並過濾文字取出純數字
+    const getNum = (keys) => {
+      for (const k of keys) {
+        if (json[k] !== undefined && json[k] !== null && json[k] !== '') {
+          const clean = String(json[k]).replace(/[^0-9.]/g, '');
+          const n = parseFloat(clean);
+          if (!isNaN(n)) return n;
+        }
+      }
+      return null;
+    };
 
     if (type === 'pump' || type === 'receipt') {
       const typeName = type === 'pump' ? '加油機' : '發票清單';
       const btnId = type === 'pump' ? 'btn-pump' : 'btn-receipt';
       const labelId = type === 'pump' ? 'label-pump' : 'label-receipt';
-      if (json.liters) { setField('f-liters', json.liters); }
-      if (json.amount) { setField('f-amount', json.amount); }
+
+      const liters = getNum(['liters', 'liter', 'volume', 'qty', 'quantity', '公升', '數量', '加油量']);
+      const amount = getNum(['amount', 'total', 'price', 'cost', 'total_amount', '金額', '總計', '總金額', '應付金額']);
+
+      if (liters !== null) { setField('f-liters', liters); }
+      if (amount !== null) { setField('f-amount', Math.round(amount)); }
+
       document.getElementById(btnId).classList.add('done');
       document.getElementById(labelId).textContent = '辨識完成 ✓';
-      setStatus(`<span>${typeName}辨識完成：` + (json.liters||'?') + ' L，' + (json.amount||'?') + ' 元</span>');
+
+      if (liters !== null || amount !== null) {
+        setStatus(`<span>✨ ${typeName}辨識成功：${liters !== null ? liters : '?'} L，${amount !== null ? Math.round(amount) : '?'} 元</span>`);
+      } else {
+        setStatus(`<span>⚠️ 未辨識出數字，AI回傳：${text.substring(0, 60)}</span>`);
+      }
     } else {
-      if (json.odo) { setField('f-odo', json.odo); }
+      const odo = getNum(['odo', 'odometer', 'km', 'mileage', '里程', '總里程']);
+      if (odo !== null) { setField('f-odo', Math.round(odo)); }
       document.getElementById('btn-odo').classList.add('done');
       document.getElementById('label-odo').textContent = '辨識完成 ✓';
-      setStatus('<span>里程表辨識完成：' + (json.odo||'?').toLocaleString() + ' km</span>');
+
+      if (odo !== null) {
+        setStatus(`<span>✨ 里程表辨識成功：${Math.round(odo).toLocaleString()} km</span>`);
+      } else {
+        setStatus(`<span>⚠️ 未辨識出里程，AI回傳：${text.substring(0, 60)}</span>`);
+      }
     }
     document.getElementById('ai-badge-row').style.display = 'block';
 
@@ -318,6 +355,8 @@ async function handlePhoto(type, input) {
     console.error(e);
     setStatus('<span style="color:#c0392b;">錯誤：' + e.message + '</span>');
     showToast('辨識失敗，請檢查狀態列原因');
+  } finally {
+    input.value = ''; // 重設 input 允許重複選擇相同照片
   }
 }
 
